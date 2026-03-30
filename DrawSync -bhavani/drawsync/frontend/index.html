@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DrawSync — Collaborative Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f0f13; --bg2: #16161d; --bg3: #1e1e28;
+      --surface: #22222e; --surface2: #2a2a38;
+      --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
+      --accent: #7c6aff; --accent2: #a594ff;
+      --text: #e8e8f0; --text2: #9090a8; --text3: #5a5a72;
+      --green: #3ddc84; --red: #ff5f57; --amber: #ffbd2e;
+      --font-ui: 'Syne', sans-serif; --font-mono: 'DM Mono', monospace;
+    }
+    html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font-ui); }
+
+    /* MODAL */
+    .modal-backdrop { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 100; animation: fadeIn .3s ease; }
+    .modal { background: var(--bg2); border: 1px solid var(--border2); border-radius: 20px; padding: 40px; width: 420px; max-width: 92vw; animation: slideUp .4s cubic-bezier(.16,1,.3,1); }
+    .modal-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+    .modal-logo span { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; }
+    .modal h2 { font-size: 22px; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.5px; }
+    .modal p { color: var(--text2); font-size: 14px; margin-bottom: 28px; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 11px; font-weight: 600; color: var(--text2); margin-bottom: 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+    .optional { color: var(--text3); font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .form-group input { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: 10px; padding: 11px 14px; color: var(--text); font-family: var(--font-ui); font-size: 15px; outline: none; transition: border-color .2s; }
+    .form-group input:focus { border-color: var(--accent); }
+    .form-group input::placeholder { color: var(--text3); }
+    .btn-join { width: 100%; margin-top: 8px; padding: 13px; border-radius: 10px; background: var(--accent); color: #fff; border: none; cursor: pointer; font-family: var(--font-ui); font-size: 15px; font-weight: 600; transition: background .2s, transform .1s; }
+    .btn-join:hover { background: var(--accent2); }
+    .btn-join:active { transform: scale(.98); }
+    .join-error { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 18px; }
+    .server-note { margin-top: 16px; padding: 10px 14px; background: var(--bg3); border-radius: 8px; font-size: 12px; color: var(--text3); font-family: var(--font-mono); }
+    .server-note span { color: var(--accent2); }
+
+    /* LOGO MARK */
+    .logo-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); position: relative; overflow: hidden; flex-shrink: 0; }
+    .logo-mark::before { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,.15) 4px, rgba(255,255,255,.15) 5px); }
+    .logo-mark.small { width: 22px; height: 22px; border-radius: 6px; }
+
+    /* APP LAYOUT */
+    #app { display: flex; flex-direction: column; height: 100vh; }
+    #app.hidden { display: none; }
+
+    /* TOPBAR */
+    .topbar { height: 52px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; flex-shrink: 0; }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .app-name { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+    .room-badge { display: flex; align-items: center; gap: 7px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-family: var(--font-mono); color: var(--text2); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); transition: background .4s; flex-shrink: 0; }
+    .status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.reconnecting { background: var(--amber); animation: pulse 1s infinite; }
+    .status-dot.error { background: var(--red); }
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+    .user-avatars { display: flex; }
+    .user-avatar { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--bg2); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-left: -5px; cursor: default; flex-shrink: 0; }
+    .btn-icon { width: 34px; height: 34px; border-radius: 8px; background: var(--bg3); border: 1px solid var(--border2); color: var(--text2); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .2s, color .2s; }
+    .btn-icon:hover { background: var(--surface2); color: var(--text); }
+    .btn-icon.danger:hover { background: rgba(255,95,87,.15); color: var(--red); border-color: rgba(255,95,87,.3); }
+
+    /* TOOLBAR */
+    .toolbar { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px; padding: 12px 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 10; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+    .tool-group { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+    .tool-divider { width: 24px; height: 1px; background: var(--border); }
+    .tool-btn { width: 36px; height: 36px; border-radius: 9px; background: transparent; border: 1px solid transparent; color: var(--text2); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+    .tool-btn:hover { background: var(--surface); color: var(--text); }
+    .tool-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .tool-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; }
+    .brush-slider { writing-mode: vertical-lr; direction: rtl; width: 4px; height: 80px; cursor: pointer; accent-color: var(--accent); }
+    .brush-display { font-family: var(--font-mono); font-size: 11px; color: var(--text3); }
+    .color-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
+    .color-swatch { width: 16px; height: 16px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: transform .15s, border-color .15s; }
+    .color-swatch:hover { transform: scale(1.2); }
+    .color-swatch.active { border-color: var(--text); transform: scale(1.15); }
+    #custom-color { width: 32px; height: 20px; border: 1px solid var(--border2); border-radius: 5px; cursor: pointer; background: none; padding: 0; margin-top: 2px; }
+
+    /* CANVAS AREA */
+    .canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg); background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 28px 28px; }
+    #main-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+    .cursor-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    .remote-cursor { position: absolute; top: 0; left: 0; pointer-events: none; display: flex; align-items: flex-start; gap: 6px; transition: transform .06s linear; }
+    .cursor-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgba(255,255,255,.6); margin-top: 2px; flex-shrink: 0; }
+    .cursor-label { font-size: 11px; font-family: var(--font-ui); font-weight: 600; color: #fff; padding: 2px 7px; border-radius: 6px; white-space: nowrap; opacity: .9; }
+
+    /* TOAST */
+    .toast { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(10px); background: var(--surface2); border: 1px solid var(--border2); border-radius: 10px; padding: 8px 16px; font-size: 13px; color: var(--text2); opacity: 0; transition: all .3s; pointer-events: none; white-space: nowrap; z-index: 20; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* PARTICIPANTS PANEL */
+    .participants-count { font-size: 12px; color: var(--text3); font-family: var(--font-mono); padding: 0 4px; }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+  </style>
+</head>
+<body>
+
+<!-- JOIN MODAL -->
+<div id="join-modal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-logo">
+      <div class="logo-mark"></div>
+      <span>DrawSync</span>
+    </div>
+    <h2>Start drawing together</h2>
+    <p>Join an existing room or create a new one. Share the room name with teammates.</p>
+    <div class="form-group">
+      <label>Your name</label>
+      <input type="text" id="input-name" placeholder="e.g. Bhavani" maxlength="20" autofocus />
+    </div>
+    <div class="form-group">
+      <label>Room name</label>
+      <input type="text" id="input-room" placeholder="e.g. cs-project" maxlength="30" />
+    </div>
+    <div class="form-group">
+      <label>Room password <span class="optional">(optional)</span></label>
+      <input type="password" id="input-password" placeholder="Leave blank for public room" />
+    </div>
+    <button class="btn-join" id="btn-join">Enter Room</button>
+    <div id="join-error" class="join-error"></div>
+    <div class="server-note">Server: <span id="server-url">ws://localhost:4000</span> &nbsp;·&nbsp; run <span>npm start</span> in /backend</div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo-mark small"></div>
+      <span class="app-name">DrawSync</span>
+      <div class="room-badge">
+        <span id="room-display"></span>
+        <div id="status-dot" class="status-dot"></div>
+      </div>
+      <span class="participants-count" id="participants-count"></span>
+    </div>
+    <div class="topbar-right">
+      <div id="user-avatars" class="user-avatars"></div>
+      <button class="btn-icon" id="btn-clear" title="Clear canvas" style="margin-left:4px">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+      </button>
+      <button class="btn-icon" id="btn-export" title="Export PNG">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="tool-group">
+      <button class="tool-btn active" data-tool="pen" title="Pen (P)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+      </button>
+      <button class="tool-btn" data-tool="eraser" title="Eraser (E)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16l10-10 7 7-2.5 2.5"/><path d="M6 11l7 7"/></svg>
+      </button>
+    </div>
+    <div class="tool-divider"></div>
+    <div class="tool-group">
+      <div class="color-grid" id="color-grid"></div>
+      <input type="color" id="custom-color" title="Custom color" value="#ffffff" />
+    </div>
+    <div class="tool-divider"></div>
+    <div class="tool-group">
+      <span class="tool-label">Size</span>
+      <input type="range" id="brush-size" min="1" max="40" value="3" class="brush-slider" />
+      <span id="brush-display" class="brush-display">3</span>
+    </div>
+    <div class="tool-divider"></div>
+    <div class="tool-group">
+      <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+      </button>
+      <button class="tool-btn" id="btn-redo" title="Redo (Ctrl+Y)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="canvas-wrap">
+    <canvas id="main-canvas"></canvas>
+    <div id="cursor-overlay" class="cursor-overlay"></div>
+    <div id="toast" class="toast"></div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ───
+const AppState = {
+  userId: `u-${Math.random().toString(36).slice(2,8)}`,
+  userName: '', roomId: '', color: '#ffffff',
+  tool: 'pen', brushSize: 3, yourColor: '#7c6aff'
+};
+
+const COLORS = ['#ffffff','#ff5f57','#ffbd2e','#3ddc84','#7c6aff','#00c8ff','#ff6baf','#ff8c42'];
+
+// ─── CANVAS ───
+const canvas = document.getElementById('main-canvas');
+const ctx = canvas.getContext('2d');
+const strokes = [];
+const redoStack = [];
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  redrawAll();
+}
+
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+}
+
+function drawStroke(s) {
+  if (!s.points || s.points.length < 2) return;
+  ctx.beginPath();
+  ctx.strokeStyle = s.color;
+  ctx.lineWidth = s.tool === 'eraser' ? s.width * 4 : s.width;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = s.tool === 'eraser' ? 'destination-out' : 'source-over';
+  ctx.moveTo(s.points[0].x, s.points[0].y);
+  for (let i = 1; i < s.points.length - 1; i++) {
+    const mx = (s.points[i].x + s.points[i+1].x) / 2;
+    const my = (s.points[i].y + s.points[i+1].y) / 2;
+    ctx.quadraticCurveTo(s.points[i].x, s.points[i].y, mx, my);
+  }
+  ctx.lineTo(s.points[s.points.length-1].x, s.points[s.points.length-1].y);
+  ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function redrawAll() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  strokes.forEach(drawStroke);
+}
+
+function replayAll(newStrokes) {
+  strokes.length = 0;
+  newStrokes.forEach(s => strokes.push(s));
+  redrawAll();
+}
+
+// ─── DRAWING EVENTS ───
+let drawing = false, currentStroke = null, cursorThrottle;
+
+canvas.addEventListener('mousedown', e => {
+  drawing = true;
+  const p = getPos(e);
+  currentStroke = {
+    id: `${AppState.userId}-${Date.now()}`,
+    tool: AppState.tool, color: AppState.color,
+    width: AppState.brushSize, points: [p],
+    userId: AppState.userId, userName: AppState.userName
+  };
+});
+
+canvas.addEventListener('mousemove', e => {
+  const pos = getPos(e);
+  clearTimeout(cursorThrottle);
+  cursorThrottle = setTimeout(() => wsSend({ type: 'cursor', pos }), 30);
+  if (!drawing || !currentStroke) return;
+  currentStroke.points.push(pos);
+  drawStroke({ ...currentStroke, points: currentStroke.points.slice(-3) });
+});
+
+canvas.addEventListener('mouseup', commitCurrentStroke);
+canvas.addEventListener('mouseleave', commitCurrentStroke);
+
+function commitCurrentStroke() {
+  if (!drawing || !currentStroke || currentStroke.points.length < 2) {
+    drawing = false; currentStroke = null; return;
+  }
+  drawing = false;
+  strokes.push(currentStroke);
+  redoStack.length = 0;
+  wsSend({ type: 'stroke', stroke: currentStroke });
+  currentStroke = null;
+}
+
+canvas.addEventListener('touchstart', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY })); }, { passive: false });
+canvas.addEventListener('touchmove', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY })); }, { passive: false });
+canvas.addEventListener('touchend', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mouseup')); });
+
+// ─── UNDO/REDO ───
+function doUndo() {
+  const idx = [...strokes].reverse().findIndex(s => s.userId === AppState.userId);
+  if (idx === -1) return;
+  const realIdx = strokes.length - 1 - idx;
+  redoStack.push(strokes.splice(realIdx, 1)[0]);
+  redrawAll();
+  wsSend({ type: 'undo' });
+  showToast('Undo');
+}
+function doRedo() {
+  if (!redoStack.length) return;
+  const s = redoStack.pop();
+  strokes.push(s);
+  drawStroke(s);
+  wsSend({ type: 'stroke', stroke: s });
+  showToast('Redo');
+}
+
+// ─── CURSORS ───
+const cursors = {};
+const overlay = document.getElementById('cursor-overlay');
+
+function updateCursor(userId, userName, color, pos) {
+  if (userId === AppState.userId) return;
+  if (!cursors[userId]) {
+    const el = document.createElement('div');
+    el.className = 'remote-cursor';
+    el.innerHTML = `<div class="cursor-dot" style="background:${color}"></div><span class="cursor-label" style="background:${color}">${userName}</span>`;
+    overlay.appendChild(el);
+    cursors[userId] = el;
+  }
+  cursors[userId].style.transform = `translate(${pos.x}px,${pos.y}px)`;
+}
+
+function removeCursor(userId) {
+  if (cursors[userId]) { cursors[userId].remove(); delete cursors[userId]; }
+}
+
+// ─── WEBSOCKET ───
+let ws = null, reconnectTimer = null;
+
+function wsConnect() {
+  const url = `ws://${location.hostname}:4000/?roomId=${AppState.roomId}&userId=${AppState.userId}&userName=${encodeURIComponent(AppState.userName)}&password=${encodeURIComponent(document.getElementById('input-password')?.value || '')}`;
+  try {
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      setStatus('connected');
+      clearTimeout(reconnectTimer);
+      showToast(`Joined "${AppState.roomId}"`);
+    };
+    ws.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      handleWsMessage(msg);
+    };
+    ws.onclose = () => {
+      setStatus('reconnecting');
+      reconnectTimer = setTimeout(wsConnect, 2000);
+    };
+    ws.onerror = () => setStatus('error');
+  } catch(err) {
+    setStatus('error');
+  }
+}
+
+function wsSend(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ ...data, roomId: AppState.roomId, userId: AppState.userId }));
+  }
+}
+
+function handleWsMessage(msg) {
+  switch (msg.type) {
+    case 'init':
+      AppState.yourColor = msg.yourColor || AppState.yourColor;
+      replayAll(msg.strokes || []);
+      updateParticipants(msg.participants || []);
+      break;
+    case 'stroke:committed':
+      if (msg.stroke.userId !== AppState.userId) {
+        strokes.push(msg.stroke);
+        drawStroke(msg.stroke);
+      }
+      break;
+    case 'undo:committed':
+      replayAll(msg.strokes || []);
+      break;
+    case 'cursor:update':
+      updateCursor(msg.userId, msg.userName, msg.color, msg.pos);
+      break;
+    case 'user:joined':
+      showToast(`${msg.userName} joined`);
+      updateParticipants(msg.participants || []);
+      break;
+    case 'user:left':
+      showToast(`${msg.userName} left`);
+      removeCursor(msg.userId);
+      updateParticipants(msg.participants || []);
+      break;
+    case 'clear':
+      strokes.length = 0; redrawAll();
+      break;
+    case 'error':
+      document.getElementById('join-error').textContent = msg.message;
+      document.getElementById('join-modal').style.display = 'flex';
+      document.getElementById('app').classList.add('hidden');
+      break;
+  }
+}
+
+// ─── UI HELPERS ───
+function setStatus(s) {
+  document.getElementById('status-dot').className = `status-dot ${s}`;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function updateParticipants(participants) {
+  const container = document.getElementById('user-avatars');
+  const count = document.getElementById('participants-count');
+  container.innerHTML = '';
+  participants.forEach(p => {
+    const av = document.createElement('div');
+    av.className = 'user-avatar';
+    av.style.background = p.color;
+    av.title = p.userName;
+    av.textContent = p.userName[0].toUpperCase();
+    container.appendChild(av);
+  });
+  count.textContent = participants.length > 1 ? `${participants.length} online` : '';
+}
+
+// ─── TOOLBAR ───
+document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    AppState.tool = btn.dataset.tool;
+  });
+});
+
+const brushSlider = document.getElementById('brush-size');
+brushSlider.addEventListener('input', () => {
+  AppState.brushSize = parseInt(brushSlider.value);
+  document.getElementById('brush-display').textContent = brushSlider.value;
+});
+
+document.getElementById('custom-color').addEventListener('input', e => {
+  AppState.color = e.target.value;
+  document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+});
+
+document.getElementById('btn-undo').addEventListener('click', doUndo);
+document.getElementById('btn-redo').addEventListener('click', doRedo);
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  if (!confirm('Clear the entire canvas for everyone?')) return;
+  strokes.length = 0; redrawAll();
+  wsSend({ type: 'clear' });
+});
+
+document.getElementById('btn-export').addEventListener('click', () => {
+  const bg = document.createElement('canvas');
+  bg.width = canvas.width; bg.height = canvas.height;
+  const bgCtx = bg.getContext('2d');
+  bgCtx.fillStyle = '#0f0f13';
+  bgCtx.fillRect(0, 0, bg.width, bg.height);
+  bgCtx.drawImage(canvas, 0, 0);
+  const a = document.createElement('a');
+  a.download = `drawsync-${AppState.roomId}.png`;
+  a.href = bg.toDataURL('image/png');
+  a.click();
+  showToast('PNG saved!');
+});
+
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); doUndo(); }
+    if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); doRedo(); }
+  }
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.key === 'p' || e.key === 'P') document.querySelector('[data-tool="pen"]').click();
+    if (e.key === 'e' || e.key === 'E') document.querySelector('[data-tool="eraser"]').click();
+  }
+});
+
+// ─── COLOR GRID ───
+function buildColorGrid() {
+  const grid = document.getElementById('color-grid');
+  COLORS.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'color-swatch' + (c === '#ffffff' ? ' active' : '');
+    sw.style.background = c;
+    sw.addEventListener('click', () => {
+      document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active');
+      AppState.color = c;
+      document.getElementById('custom-color').value = c;
+    });
+    grid.appendChild(sw);
+  });
+}
+
+// ─── JOIN ───
+function launchApp() {
+  document.getElementById('join-modal').style.display = 'none';
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('room-display').textContent = AppState.roomId;
+  buildColorGrid();
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+  wsConnect();
+}
+
+document.getElementById('btn-join').addEventListener('click', () => {
+  const name = document.getElementById('input-name').value.trim();
+  const room = document.getElementById('input-room').value.trim();
+  const err = document.getElementById('join-error');
+  if (!name) { err.textContent = 'Please enter your name.'; return; }
+  if (!room) { err.textContent = 'Please enter a room name.'; return; }
+  err.textContent = '';
+  AppState.userName = name;
+  AppState.roomId = room;
+  launchApp();
+});
+
+['input-name','input-room','input-password'].forEach((id, i, arr) => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      if (i < arr.length - 1) document.getElementById(arr[i+1]).focus();
+      else document.getElementById('btn-join').click();
+    }
+  });
+});
+</script>
+</body>
+</html>
