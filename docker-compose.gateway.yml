@@ -1,0 +1,110 @@
+# ── Monica's Gateway — docker-compose section ────────────────────────────────
+#
+# ADD THIS TO the project root docker-compose.yml
+# This is Monica's contribution only — the full file is assembled
+# by Aditi (deployment module).
+#
+# CLOUD CONCEPT: Service mesh / reverse proxy pattern — the gateway
+# is the only container with an exposed port. Replicas are on an
+# internal network only. Browsers never reach replicas directly.
+#
+# CLOUD CONCEPT: Docker networking — 'raftboard-net' is a bridge
+# network. Container names (replica1, replica2, replica3) are
+# resolvable as DNS hostnames inside this network.
+# So REPLICA1_URL=http://replica1:5001 works from inside the gateway.
+#
+# CLOUD CONCEPT: Environment variables for config injection —
+# no hardcoded URLs in code. Change replicas without rebuilding image.
+#
+# CLOUD CONCEPT: Depends_on with condition: service_healthy means
+# the gateway waits for replicas to pass their healthcheck before
+# starting. This prevents connection errors on fresh boot.
+
+services:
+
+  # ── Monica's Gateway ────────────────────────────────────────────
+  gateway:
+    build:
+      context: ./monica_gateway        # path relative to project root
+      dockerfile: Dockerfile
+    container_name: monica-gateway
+    ports:
+      - "4000:4000"                    # Only exposed port — reverse proxy entry point
+    environment:
+      # Gateway config
+      - GATEWAY_PORT=4000
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+
+      # RAFT Replica URLs (Adishree's containers)
+      # These use Docker internal DNS — no IP addresses needed
+      - REPLICA1_URL=http://replica1:5001
+      - REPLICA2_URL=http://replica2:5002
+      - REPLICA3_URL=http://replica3:5003
+
+      # Leader detection tuning
+      - HEARTBEAT_INTERVAL_MS=2000
+      - HEARTBEAT_TIMEOUT_MS=1500
+      - LEADER_RETRY_ATTEMPTS=3
+      - LEADER_RETRY_DELAY_MS=500
+
+      # Security / rate limiting
+      - RATE_LIMIT_MSG_PER_SEC=30
+      - RATE_LIMIT_CONN_PER_IP=10
+
+    # CLOUD CONCEPT: Fault tolerance — restart the gateway container
+    # automatically if it crashes. 'unless-stopped' means it also
+    # restarts after a Docker daemon restart (e.g. server reboot).
+    restart: unless-stopped
+
+    # CLOUD CONCEPT: Health check — Docker monitors this endpoint.
+    # If it fails 3 times, Docker marks the container as unhealthy
+    # and can restart it (when combined with restart policy).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # CLOUD CONCEPT: Internal network only for backend communication.
+    # The gateway is on both the external-facing bridge and the
+    # internal raft network. Replicas are ONLY on the internal network.
+    networks:
+      - raftboard-net
+
+    # CLOUD CONCEPT: Resource allocation — cap CPU and memory so a
+    # misbehaving gateway cannot starve replicas on the same host.
+    # This mirrors cloud VM sizing / container resource quotas.
+    deploy:
+      resources:
+        limits:
+          cpus:   "0.5"
+          memory: "256M"
+        reservations:
+          cpus:   "0.1"
+          memory: "64M"
+
+    # Wait for at least one replica to be healthy before starting
+    # (Aditi's replica containers must define their own healthchecks)
+    depends_on:
+      replica1:
+        condition: service_healthy
+      replica2:
+        condition: service_healthy
+      replica3:
+        condition: service_healthy
+
+# ── Shared Network ───────────────────────────────────────────────
+# Defined here for Monica's reference.
+# Aditi will include this in the full docker-compose.yml.
+networks:
+  raftboard-net:
+    driver: bridge
+
+# ── NOTE TO ADITI ────────────────────────────────────────────────
+# The gateway expects replica containers named:
+#   replica1 (port 5001), replica2 (port 5002), replica3 (port 5003)
+# Each replica must expose GET /heartbeat returning:
+#   { "role": "leader" }   OR   { "role": "follower" }
+# The gateway uses this to detect which replica is the RAFT leader.
