@@ -1,0 +1,100 @@
+version: "3.9"
+
+# ─── Mini-RAFT Cluster ───────────────────────────────────────────────────────
+# Starts: 3 replica nodes + 1 dashboard
+# Hot-reload: Edit any file under replica1/src, replica2/src, or replica3/src
+#             and nodemon will restart that container automatically.
+
+networks:
+  raft-net:
+    driver: bridge
+
+services:
+
+  # ── Replica 1 ─────────────────────────────────────────────────────────────
+  replica1:
+    build:
+      context: ./replica
+      dockerfile: Dockerfile
+    container_name: raft-replica1
+    networks: [raft-net]
+    ports:
+      - "3001:3001"
+    environment:
+      REPLICA_ID: "replica1"
+      PORT:       "3001"
+      # Peer addresses inside the Docker network (service-name:port)
+      PEERS: "replica2:3002,replica3:3003"
+    volumes:
+      # Bind-mount source for hot-reload (nodemon watches ./src)
+      - ./replica/src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD","wget","-qO-","http://localhost:3001/health"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Replica 2 ─────────────────────────────────────────────────────────────
+  replica2:
+    build:
+      context: ./replica
+      dockerfile: Dockerfile
+    container_name: raft-replica2
+    networks: [raft-net]
+    ports:
+      - "3002:3002"
+    environment:
+      REPLICA_ID: "replica2"
+      PORT:       "3002"
+      PEERS: "replica1:3001,replica3:3003"
+    volumes:
+      - ./replica/src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD","wget","-qO-","http://localhost:3002/health"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Replica 3 ─────────────────────────────────────────────────────────────
+  replica3:
+    build:
+      context: ./replica
+      dockerfile: Dockerfile
+    container_name: raft-replica3
+    networks: [raft-net]
+    ports:
+      - "3003:3003"
+    environment:
+      REPLICA_ID: "replica3"
+      PORT:       "3003"
+      PEERS: "replica1:3001,replica2:3002"
+    volumes:
+      - ./replica/src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD","wget","-qO-","http://localhost:3003/health"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Dashboard ─────────────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: raft-dashboard
+    networks: [raft-net]
+    ports:
+      - "4000:4000"
+    environment:
+      PORT:          "4000"
+      REPLICA1_URL:  "http://replica1:3001"
+      REPLICA2_URL:  "http://replica2:3002"
+      REPLICA3_URL:  "http://replica3:3003"
+    depends_on:
+      replica1: { condition: service_healthy }
+      replica2: { condition: service_healthy }
+      replica3: { condition: service_healthy }
+    restart: unless-stopped
