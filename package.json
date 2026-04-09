@@ -1,0 +1,26 @@
+{
+  "name": "monica-gateway",
+  "version": "1.0.0",
+  "description": "Monica's Gateway WebSocket Server — MiniRAFT Drawing Board",
+  "main": "websocket_server/server.js",
+  "scripts": {
+    "start": "node websocket_server/server.js",
+    "dev":   "node --watch websocket_server/server.js"
+  },
+  "dependencies": {
+    "cors":               "^2.8.5",
+    "express":            "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "ws":                 "^8.14.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["websocket", "gateway", "raft", "distributed", "drawing"],
+  "author": "Monica",
+  "license": "MIT",
+  "notes": [
+    "All dependencies are pure JavaScript — no native binaries.",
+    "Safe on ARM64 (Mac M4) and AMD64 without platform flags."
+  ]
+}
