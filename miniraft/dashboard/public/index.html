@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Mini-RAFT Cluster Dashboard</title>
+<style>
+/* ── Reset & Base ──────────────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bg4:#30363d;
+  --border:#30363d;--border2:#484f58;
+  --text:#e6edf3;--text2:#8b949e;--text3:#6e7681;
+  --leader:#3fb950;--leader-glow:rgba(63,185,80,.35);
+  --candidate:#d29922;--candidate-glow:rgba(210,153,34,.35);
+  --follower:#388bfd;--follower-glow:rgba(56,139,253,.25);
+  --unknown:#6e7681;--unknown-glow:rgba(110,118,129,.15);
+  --danger:#f85149;--accent:#58a6ff;
+  --r:8px;
+}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+     font-size:14px;line-height:1.5;min-height:100vh}
+
+/* ── Layout ─────────────────────────────────────────────────── */
+header{background:var(--bg2);border-bottom:1px solid var(--border);
+       padding:12px 24px;display:flex;align-items:center;gap:16px;
+       position:sticky;top:0;z-index:100}
+header h1{font-size:18px;font-weight:700;letter-spacing:-.3px}
+header h1 span{color:var(--accent)}
+.badge{background:var(--bg3);border:1px solid var(--border);border-radius:20px;
+       padding:2px 10px;font-size:12px;color:var(--text2)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--leader);
+            animation:pulse-green 2s infinite}
+@keyframes pulse-green{0%,100%{box-shadow:0 0 0 0 var(--leader-glow)}
+                        50%{box-shadow:0 0 0 6px transparent}}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+
+main{padding:20px 24px;display:grid;gap:20px}
+
+/* ── Node Cards ──────────────────────────────────────────────── */
+.nodes-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:900px){.nodes-grid{grid-template-columns:1fr}}
+
+.node-card{background:var(--bg2);border:2px solid var(--border);border-radius:var(--r);
+           padding:16px;transition:border-color .3s,box-shadow .3s;position:relative;
+           overflow:hidden}
+.node-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;
+                   border-radius:var(--r) var(--r) 0 0;transition:background .3s}
+.node-card.leader  {border-color:var(--leader);  box-shadow:0 0 24px var(--leader-glow)}
+.node-card.leader::before{background:var(--leader)}
+.node-card.candidate{border-color:var(--candidate);box-shadow:0 0 20px var(--candidate-glow)}
+.node-card.candidate::before{background:var(--candidate)}
+.node-card.follower{border-color:var(--follower); box-shadow:0 0 12px var(--follower-glow)}
+.node-card.follower::before{background:var(--follower)}
+.node-card.unknown {border-color:var(--unknown);  opacity:.7}
+.node-card.unknown::before{background:var(--unknown)}
+
+.node-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.node-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;
+           justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
+.leader   .node-icon{background:var(--leader-glow);color:var(--leader)}
+.candidate .node-icon{background:var(--candidate-glow);color:var(--candidate)}
+.follower .node-icon{background:var(--follower-glow);color:var(--follower)}
+.unknown  .node-icon{background:var(--unknown-glow);color:var(--unknown)}
+
+.node-title{font-weight:600;font-size:15px}
+.role-badge{margin-left:auto;padding:3px 10px;border-radius:12px;font-size:11px;
+            font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.leader    .role-badge{background:var(--leader-glow); color:var(--leader)}
+.candidate .role-badge{background:var(--candidate-glow);color:var(--candidate)}
+.follower  .role-badge{background:var(--follower-glow); color:var(--follower)}
+.unknown   .role-badge{background:var(--unknown-glow);  color:var(--unknown)}
+
+.node-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.stat{background:var(--bg3);border-radius:6px;padding:8px 10px}
+.stat-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px}
+.stat-val{font-size:20px;font-weight:700;margin-top:1px}
+
+.node-events{background:var(--bg3);border-radius:6px;padding:8px 10px;
+             max-height:120px;overflow-y:auto}
+.event-row{font-size:11px;padding:2px 0;border-bottom:1px solid var(--border);
+           display:flex;gap:6px;align-items:flex-start}
+.event-row:last-child{border:none}
+.event-time{color:var(--text3);flex-shrink:0;font-family:monospace}
+.event-type{flex-shrink:0;font-weight:600;min-width:70px}
+.event-type.LEADER{color:var(--leader)}
+.event-type.ELECTION{color:var(--candidate)}
+.event-type.VOTE{color:#a371f7}
+.event-type.APPEND{color:var(--accent)}
+.event-type.COMMIT{color:#f0883e}
+.event-type.SYNC{color:#79c0ff}
+.event-type.HEARTBEAT,.event-type.ROLE{color:var(--text3)}
+.event-type.ERROR{color:var(--danger)}
+.event-msg{color:var(--text2);word-break:break-word}
+
+.node-actions{display:flex;gap:6px;margin-top:10px}
+.btn{padding:5px 12px;border-radius:6px;border:1px solid var(--border);
+     background:var(--bg3);color:var(--text2);cursor:pointer;font-size:12px;
+     transition:all .15s}
+.btn:hover{background:var(--bg4);color:var(--text)}
+.btn-danger:hover{border-color:var(--danger);color:var(--danger)}
+.btn-sm{padding:3px 8px;font-size:11px}
+
+/* ── Topology ─────────────────────────────────────────────────── */
+.section-title{font-size:13px;font-weight:600;color:var(--text2);
+               text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px;
+               display:flex;align-items:center;gap:8px}
+.section-title::after{content:'';flex:1;height:1px;background:var(--border)}
+
+.bottom-grid{display:grid;grid-template-columns:320px 1fr;gap:16px}
+@media(max-width:1100px){.bottom-grid{grid-template-columns:1fr}}
+
+.panel{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+
+#topology-canvas{width:100%;display:block;border-radius:6px;background:var(--bg3)}
+
+/* ── Charts ───────────────────────────────────────────────────── */
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.charts-grid{grid-template-columns:1fr}}
+
+canvas.chart{width:100%!important;height:160px!important;display:block}
+
+/* ── Timeline ─────────────────────────────────────────────────── */
+#leader-timeline{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto}
+.tl-row{display:flex;gap:10px;align-items:center;font-size:12px;padding:5px 8px;
+        background:var(--bg3);border-radius:6px}
+.tl-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.tl-dot.replica1{background:#3fb950}
+.tl-dot.replica2{background:#d29922}
+.tl-dot.replica3{background:#388bfd}
+.tl-text{color:var(--text2)}
+.tl-time{margin-left:auto;color:var(--text3);font-family:monospace}
+
+/* ── RPC Stats ────────────────────────────────────────────────── */
+.rpc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.rpc-card{background:var(--bg3);border-radius:6px;padding:10px;text-align:center}
+.rpc-card .big{font-size:24px;font-weight:700}
+.rpc-card .lbl{font-size:11px;color:var(--text3);margin-top:2px}
+
+/* ── Inject Entry ──────────────────────────────────────────────── */
+.inject-row{display:flex;gap:8px;margin-top:12px}
+.inject-row input{flex:1;background:var(--bg3);border:1px solid var(--border);
+                  border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px}
+.inject-row input:focus{outline:none;border-color:var(--accent)}
+
+/* ── Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+
+/* ── Animations ───────────────────────────────────────────────── */
+@keyframes fade-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.fade-in{animation:fade-in .3s ease}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="globalDot"></div>
+  <h1>Mini-<span>RAFT</span> Cluster Dashboard</h1>
+  <span class="badge" id="clusterStatus">Connecting…</span>
+  <span class="badge" id="leaderBadge">Leader: —</span>
+  <span class="badge" id="termBadge">Term: 0</span>
+  <div class="hdr-right">
+    <span class="badge" id="pollBadge">⏱ — ms</span>
+    <button class="btn btn-sm" onclick="injectTestEntry()">+ Inject Entry</button>
+    <button class="btn btn-sm" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
+  </div>
+</header>
+
+<main>
+  <!-- Node Cards -->
+  <div>
+    <div class="section-title">Replica Nodes</div>
+    <div class="nodes-grid" id="nodesGrid"></div>
+  </div>
+
+  <!-- Charts Row -->
+  <div>
+    <div class="section-title">Live Metrics</div>
+    <div class="charts-grid">
+      <div class="panel">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Log Length Over Time</div>
+        <canvas id="logChart" class="chart"></canvas>
+      </div>
+      <div class="panel">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Term Number Over Time</div>
+        <canvas id="termChart" class="chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Grid -->
+  <div class="bottom-grid">
+    <!-- Topology -->
+    <div class="panel">
+      <div class="section-title">Cluster Topology</div>
+      <canvas id="topology-canvas" width="280" height="220"></canvas>
+    </div>
+
+    <!-- Right column -->
+    <div style="display:grid;gap:16px">
+
+      <!-- RPC Stats -->
+      <div class="panel">
+        <div class="section-title">RPC Statistics (Aggregated)</div>
+        <div class="rpc-grid" id="rpcGrid">
+          <div class="rpc-card"><div class="big" id="rpcSent">—</div><div class="lbl">Sent</div></div>
+          <div class="rpc-card"><div class="big" id="rpcReceived">—</div><div class="lbl">Received</div></div>
+          <div class="rpc-card"><div class="big" id="rpcFailed" style="color:var(--danger)">—</div><div class="lbl">Failed</div></div>
+        </div>
+
+        <div class="inject-row">
+          <input id="entryInput" placeholder="Entry payload (optional)…"/>
+          <button class="btn" onclick="injectTestEntry()">Inject to Leader</button>
+        </div>
+      </div>
+
+      <!-- Leader Timeline -->
+      <div class="panel">
+        <div class="section-title">Leader History</div>
+        <div id="leader-timeline"><p style="color:var(--text3);font-size:12px">Waiting for elections…</p></div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<script>
+// ── Config ────────────────────────────────────────────────────────────
+const API     = '';          // same origin
+const POLL_MS = 1000;
+let   paused  = false;
+let   lastPollMs = 0;
+
+// ── Chart State ───────────────────────────────────────────────────────
+const MAX_PTS = 60;
+const chartLabels = [];
+const logData  = { replica1:[], replica2:[], replica3:[] };
+const termData = { replica1:[], replica2:[], replica3:[] };
+
+const NODE_COLORS = {
+  replica1: { line:'#3fb950', fill:'rgba(63,185,80,.15)'  },
+  replica2: { line:'#d29922', fill:'rgba(210,153,34,.15)' },
+  replica3: { line:'#388bfd', fill:'rgba(56,139,253,.15)' },
+};
+
+// ── Tiny Chart Engine (no library dependency) ─────────────────────────
+function drawLineChart(canvasId, datasets, yLabel='') {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx   = canvas.getContext('2d');
+  const W     = canvas.offsetWidth || 400;
+  const H     = 160;
+  canvas.width  = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+  ctx.clearRect(0,0,W,H);
+
+  const PAD = {t:10,r:16,b:28,l:40};
+  const chartW = W - PAD.l - PAD.r;
+  const chartH = H - PAD.t - PAD.b;
+
+  // Compute y range
+  const allVals = datasets.flatMap(d=>d.data).filter(v=>v!=null);
+  const yMin    = allVals.length ? Math.min(...allVals) : 0;
+  const yMax    = allVals.length ? Math.max(...allVals) : 10;
+  const yRange  = Math.max(yMax - yMin, 1);
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth   = 1;
+  const gridLines = 4;
+  for (let i=0;i<=gridLines;i++) {
+    const y = PAD.t + chartH - (i/gridLines)*chartH;
+    ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+chartW,y); ctx.stroke();
+    ctx.fillStyle='#6e7681'; ctx.font='10px monospace'; ctx.textAlign='right';
+    ctx.fillText(Math.round(yMin + (i/gridLines)*yRange), PAD.l-4, y+3);
+  }
+
+  const pts = chartLabels.length;
+  if (pts < 2) return;
+
+  function xOf(i) { return PAD.l + (i/(pts-1))*chartW; }
+  function yOf(v) { return PAD.t + chartH - ((v-yMin)/yRange)*chartH; }
+
+  // Lines
+  datasets.forEach(ds => {
+    if (!ds.data.length) return;
+    ctx.strokeStyle = ds.color;
+    ctx.lineWidth   = 2;
+    ctx.beginPath();
+    let started = false;
+    ds.data.forEach((v,i) => {
+      if (v == null) { started=false; return; }
+      started ? ctx.lineTo(xOf(i),yOf(v)) : ctx.moveTo(xOf(i),yOf(v));
+      started = true;
+    });
+    ctx.stroke();
+
+    // Fill
+    ctx.fillStyle = ds.fill;
+    ctx.beginPath();
+    let fs=true;
+    ds.data.forEach((v,i) => {
+      if (v==null){fs=true;return;}
+      if(fs){ ctx.moveTo(xOf(i),yOf(yMin)); ctx.lineTo(xOf(i),yOf(v)); fs=false; }
+      else ctx.lineTo(xOf(i),yOf(v));
+    });
+    ctx.lineTo(xOf(ds.data.length-1),yOf(yMin));
+    ctx.closePath(); ctx.fill();
+  });
+
+  // X axis labels (every 10 pts)
+  ctx.fillStyle='#6e7681'; ctx.font='10px monospace'; ctx.textAlign='center';
+  for(let i=0;i<pts;i+=10){
+    ctx.fillText(chartLabels[i]||'', xOf(i), H-PAD.b+14);
+  }
+
+  // Legend
+  datasets.forEach((ds,idx)=>{
+    const lx = PAD.l + idx*80;
+    const ly = H - 4;
+    ctx.strokeStyle=ds.color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(lx,ly-3); ctx.lineTo(lx+16,ly-3); ctx.stroke();
+    ctx.fillStyle='#8b949e'; ctx.font='10px sans-serif'; ctx.textAlign='left';
+    ctx.fillText(ds.label,lx+20,ly);
+  });
+}
+
+// ── Topology Canvas ───────────────────────────────────────────────────
+function drawTopology(replicas) {
+  const canvas = document.getElementById('topology-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = 280, H = 220;
+  ctx.clearRect(0,0,W,H);
+
+  const positions = {
+    replica1: {x:140, y:50},
+    replica2: {x:50,  y:175},
+    replica3: {x:230, y:175}
+  };
+  const roleColor = {
+    leader:'#3fb950', candidate:'#d29922',
+    follower:'#388bfd', unknown:'#6e7681'
+  };
+
+  const leaderNode = replicas.find(r=>r.role==='leader');
+
+  // Draw connections
+  replicas.forEach(r=>{
+    if (!r.reachable) return;
+    const pos = positions[r.id];
+    if (!pos) return;
+    replicas.forEach(r2=>{
+      if (r.id >= r2.id || !r2.reachable) return;
+      const pos2 = positions[r2.id];
+      const isLeaderLink = r.role==='leader'||r2.role==='leader';
+      ctx.beginPath();
+      ctx.moveTo(pos.x,pos.y); ctx.lineTo(pos2.x,pos2.y);
+      ctx.strokeStyle = isLeaderLink ? 'rgba(63,185,80,.4)' : 'rgba(139,148,158,.2)';
+      ctx.lineWidth   = isLeaderLink ? 2 : 1;
+      if (isLeaderLink) {
+        ctx.setLineDash([]);
+      } else {
+        ctx.setLineDash([4,4]);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  });
+
+  // Draw nodes
+  replicas.forEach(r=>{
+    const pos = positions[r.id];
+    if (!pos) return;
+    const color = roleColor[r.role] || roleColor.unknown;
+    const isLeader = r.role==='leader';
+    const isOffline= !r.reachable;
+
+    // Glow ring for leader
+    if (isLeader) {
+      ctx.beginPath();
+      ctx.arc(pos.x,pos.y,26,0,Math.PI*2);
+      ctx.fillStyle='rgba(63,185,80,.15)'; ctx.fill();
+    }
+
+    // Node circle
+    ctx.beginPath();
+    ctx.arc(pos.x,pos.y,20,0,Math.PI*2);
+    ctx.fillStyle   = isOffline ? '#21262d' : '#161b22';
+    ctx.strokeStyle = isOffline ? '#6e7681' : color;
+    ctx.lineWidth   = isLeader ? 3 : 2;
+    ctx.fill(); ctx.stroke();
+
+    // Label
+    ctx.fillStyle   = isOffline ? '#6e7681' : color;
+    ctx.font        = 'bold 11px monospace';
+    ctx.textAlign   = 'center';
+    ctx.textBaseline= 'middle';
+    ctx.fillText(r.id.replace('replica','R'), pos.x, pos.y);
+
+    // Role label below
+    ctx.fillStyle   = isOffline ? '#6e7681' : '#8b949e';
+    ctx.font        = '10px sans-serif';
+    ctx.fillText(isOffline ? 'offline' : r.role, pos.x, pos.y+32);
+
+    // Term badge
+    if (!isOffline) {
+      ctx.fillStyle   = '#0d1117';
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.roundRect(pos.x+12,pos.y-30,28,16,4);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = color; ctx.font='bold 9px monospace';
+      ctx.fillText('T'+r.currentTerm, pos.x+26, pos.y-22);
+    }
+  });
+
+  // Legend
+  const legend=[['leader','#3fb950'],['candidate','#d29922'],['follower','#388bfd'],['offline','#6e7681']];
+  legend.forEach(([label,color],i)=>{
+    const lx=12+(i%2)*130, ly=H-28+(i>=2?14:0);
+    ctx.beginPath(); ctx.arc(lx+5,ly,5,0,Math.PI*2);
+    ctx.fillStyle=color; ctx.fill();
+    ctx.fillStyle='#8b949e'; ctx.font='10px sans-serif';
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(label,lx+13,ly);
+  });
+}
+
+// ── Node Card Renderer ────────────────────────────────────────────────
+function roleIcon(role) {
+  return {leader:'👑', candidate:'⚡', follower:'🔵', unknown:'❓'}[role]||'❓';
+}
+
+function renderNodeCard(r) {
+  const cls = r.reachable ? (r.role||'unknown') : 'unknown';
+  const msSince = r.lastHeartbeatReceived
+    ? Math.round((Date.now() - r.lastHeartbeatReceived)/10)/100+'s ago'
+    : 'N/A';
+
+  const events = (r.recentEvents||[]).slice(0,8).map(ev=>`
+    <div class="event-row">
+      <span class="event-time">${new Date(ev.timestamp||ev.time).toLocaleTimeString()}</span>
+      <span class="event-type ${ev.type}">${ev.type||'?'}</span>
+      <span class="event-msg">${ev.message||''}</span>
+    </div>`).join('');
+
+  return `
+  <div class="node-card ${cls} fade-in">
+    <div class="node-header">
+      <div class="node-icon">${roleIcon(r.role)}</div>
+      <div>
+        <div class="node-title">${r.id||'unknown'}</div>
+        <div style="font-size:11px;color:var(--text3)">:${r.port||'—'} · up ${r.uptime||0}s</div>
+      </div>
+      <span class="role-badge">${r.reachable ? (r.role||'unknown') : 'OFFLINE'}</span>
+    </div>
+
+    <div class="node-stats">
+      <div class="stat">
+        <div class="stat-label">Term</div>
+        <div class="stat-val">${r.currentTerm||0}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Log Length</div>
+        <div class="stat-val">${r.logLength||0}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Committed</div>
+        <div class="stat-val">${r.commitIndex >= 0 ? r.commitIndex+1 : 0}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Leader</div>
+        <div class="stat-val" style="font-size:13px">${r.leaderId||'—'}</div>
+      </div>
+    </div>
+
+    ${r.reachable && (r.rpcStats) ? `
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <div style="flex:1;background:var(--bg3);border-radius:6px;padding:5px 8px;font-size:11px">
+        <span style="color:var(--text3)">RPC Sent </span><strong>${r.rpcStats.sent||0}</strong>
+      </div>
+      <div style="flex:1;background:var(--bg3);border-radius:6px;padding:5px 8px;font-size:11px">
+        <span style="color:var(--text3)">Failed </span><strong style="color:var(--danger)">${r.rpcStats.failed||0}</strong>
+      </div>
+    </div>` : ''}
+
+    <div class="node-events" style="font-size:11px;margin-bottom:8px">
+      ${events || '<span style="color:var(--text3)">No events yet…</span>'}
+    </div>
+
+    <div class="node-actions">
+      <button class="btn btn-sm btn-danger" onclick="forceElection('${r.id}')">⚡ Force Election</button>
+      <button class="btn btn-sm" onclick="viewLog('${r.id}')">📋 View Log</button>
+    </div>
+  </div>`;
+}
+
+// ── Update Loop ───────────────────────────────────────────────────────
+async function fetchAndUpdate() {
+  if (paused) return;
+  const t0 = performance.now();
+  try {
+    const res  = await fetch(`${API}/api/cluster`);
+    const data = await res.json();
+    lastPollMs = Math.round(performance.now()-t0);
+
+    updateHeader(data);
+    updateNodes(data.replicas);
+    updateCharts(data.replicas);
+    updateTopology(data.replicas);
+    updateRpcStats(data.replicas);
+    updateTimeline(data.leaderTimeline||[]);
+
+  } catch(e) {
+    document.getElementById('clusterStatus').textContent = '⚠ Connection lost';
+    console.error(e);
+  }
+}
+
+function updateHeader(data) {
+  const replicas = data.replicas||[];
+  const leader   = replicas.find(r=>r.role==='leader');
+  const reachable= replicas.filter(r=>r.reachable).length;
+  const maxTerm  = Math.max(...replicas.map(r=>r.currentTerm||0));
+
+  document.getElementById('clusterStatus').textContent =
+    `${reachable}/${replicas.length} nodes up`;
+  document.getElementById('leaderBadge').textContent =
+    leader ? `Leader: ${leader.id}` : 'Leader: NONE';
+  document.getElementById('termBadge').textContent = `Term: ${maxTerm}`;
+  document.getElementById('pollBadge').textContent  = `⏱ ${lastPollMs}ms`;
+
+  const dot = document.getElementById('globalDot');
+  dot.style.background = reachable >= 2 ? 'var(--leader)'
+    : reachable >= 1 ? 'var(--candidate)' : 'var(--danger)';
+}
+
+function updateNodes(replicas) {
+  const grid = document.getElementById('nodesGrid');
+  if (!replicas) return;
+  grid.innerHTML = replicas.map(renderNodeCard).join('');
+}
+
+function updateCharts(replicas) {
+  if (!replicas) return;
+  const now = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',
+    minute:'2-digit',second:'2-digit'});
+  chartLabels.push(now);
+  if (chartLabels.length > MAX_PTS) chartLabels.shift();
+
+  replicas.forEach(r=>{
+    const id = r.id;
+    if (!logData[id])  logData[id]  = [];
+    if (!termData[id]) termData[id] = [];
+
+    logData[id].push(r.reachable ? (r.logLength||0) : null);
+    termData[id].push(r.reachable ? (r.currentTerm||0) : null);
+
+    if (logData[id].length  > MAX_PTS) logData[id].shift();
+    if (termData[id].length > MAX_PTS) termData[id].shift();
+  });
+
+  const ids = ['replica1','replica2','replica3'];
+  drawLineChart('logChart', ids.map(id=>({
+    label: id, data: logData[id]||[],
+    color: NODE_COLORS[id].line, fill: NODE_COLORS[id].fill
+  })));
+  drawLineChart('termChart', ids.map(id=>({
+    label: id, data: termData[id]||[],
+    color: NODE_COLORS[id].line, fill: NODE_COLORS[id].fill
+  })));
+}
+
+function updateTopology(replicas) {
+  if (replicas) drawTopology(replicas);
+}
+
+function updateRpcStats(replicas) {
+  if (!replicas) return;
+  let sent=0,recv=0,fail=0;
+  replicas.forEach(r=>{
+    if (r.rpcStats) {
+      sent += r.rpcStats.sent||0;
+      recv += r.rpcStats.received||0;
+      fail += r.rpcStats.failed||0;
+    }
+  });
+  document.getElementById('rpcSent').textContent     = sent.toLocaleString();
+  document.getElementById('rpcReceived').textContent = recv.toLocaleString();
+  document.getElementById('rpcFailed').textContent   = fail.toLocaleString();
+}
+
+function updateTimeline(timeline) {
+  const el = document.getElementById('leader-timeline');
+  if (!timeline.length) return;
+  el.innerHTML = [...timeline].reverse().slice(0,12).map(t=>`
+    <div class="tl-row">
+      <div class="tl-dot ${t.leaderId}"></div>
+      <span class="tl-text">${t.leaderId} became leader</span>
+      <span style="color:var(--candidate);margin-left:6px;font-size:11px">T${t.term}</span>
+      <span class="tl-time">${new Date(t.time).toLocaleTimeString()}</span>
+    </div>`).join('');
+}
+
+// ── Actions ───────────────────────────────────────────────────────────
+async function forceElection(id) {
+  try {
+    await fetch(`${API}/api/replica/${id}/force-election`, {method:'POST'});
+  } catch(e) { console.error(e); }
+}
+
+async function viewLog(id) {
+  try {
+    const res  = await fetch(`${API}/api/replica/${id}/log`);
+    const data = await res.json();
+    const entries = (data.entries||[]).map(e=>
+      `#${e.index} T${e.term}: ${JSON.stringify(e.entry)}`).join('\n');
+    alert(`Log for ${id} (${data.logLength} entries, committed=${data.commitIndex})\n\n${entries||'(empty)'}`);
+  } catch(e) { alert('Could not fetch log: '+e.message); }
+}
+
+async function injectTestEntry() {
+  const input = document.getElementById('entryInput');
+  const entry = input.value || `stroke-${Date.now()}`;
+  try {
+    const res  = await fetch(`${API}/api/inject-entry`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({entry})
+    });
+    const data = await res.json();
+    if (data.success) {
+      input.value = '';
+      input.style.borderColor='var(--leader)';
+      setTimeout(()=>input.style.borderColor='',800);
+    } else {
+      input.style.borderColor='var(--danger)';
+      setTimeout(()=>input.style.borderColor='',800);
+    }
+  } catch(e) { console.error(e); }
+}
+
+function togglePause() {
+  paused = !paused;
+  document.getElementById('pauseBtn').textContent = paused ? '▶ Resume' : '⏸ Pause';
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────
+fetchAndUpdate();
+setInterval(fetchAndUpdate, POLL_MS);
+</script>
+</body>
+</html>
