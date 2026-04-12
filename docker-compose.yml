@@ -1,0 +1,156 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RaftBoard — Full System docker-compose
+# OCP Extension: This file is NEW. Existing miniraft/docker-compose.yml
+# and docker-compose.gateway.yml are NOT modified.
+#
+# Architecture:
+#   gateway  → ws://localhost:4000  (Monica's gateway, rewired to raft-net)
+#   replica1 → http://localhost:5001
+#   replica2 → http://localhost:5002
+#   replica3 → http://localhost:5003
+#   frontend → http://localhost:8080  (static drawing board)
+#   dashboard → http://localhost:6001 (RAFT observability)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+networks:
+  raftboard-net:
+    driver: bridge
+
+services:
+
+  # ── Replica 1 ──────────────────────────────────────────────────────────────
+  replica1:
+    build:
+      context: ./miniraft/replica        # uses EXISTING Dockerfile/image
+      dockerfile: Dockerfile
+    container_name: raft-replica1
+    networks: [raftboard-net]
+    ports:
+      - "5001:5001"
+    environment:
+      REPLICA_ID: "replica1"
+      PORT:       "5001"
+      PEERS:      "replica2:5002,replica3:5003"
+    volumes:
+      # OCP: bind-mount NEW per-replica src dirs; existing miniraft/replica/src is untouched
+      - ./replica1/src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD", "wget", "-qO-", "http://localhost:5001/health"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Replica 2 ──────────────────────────────────────────────────────────────
+  replica2:
+    build:
+      context: ./miniraft/replica
+      dockerfile: Dockerfile
+    container_name: raft-replica2
+    networks: [raftboard-net]
+    ports:
+      - "5002:5002"
+    environment:
+      REPLICA_ID: "replica2"
+      PORT:       "5002"
+      PEERS:      "replica1:5001,replica3:5003"
+    volumes:
+      - ./replica2/src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD", "wget", "-qO-", "http://localhost:5002/health"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Replica 3 ──────────────────────────────────────────────────────────────
+  replica3:
+    build:
+      context: ./miniraft/replica
+      dockerfile: Dockerfile
+    container_name: raft-replica3
+    networks: [raftboard-net]
+    ports:
+      - "5003:5003"
+    environment:
+      REPLICA_ID: "replica3"
+      PORT:       "5003"
+      PEERS:      "replica1:5001,replica2:5002"
+    volumes:
+      - ./replica3/src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD", "wget", "-qO-", "http://localhost:5003/health"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Gateway ────────────────────────────────────────────────────────────────
+  # OCP: Uses Monica's existing Dockerfile, with a NEW entry-point that loads
+  # from ./gateway/ (the extension folder). The gateway/ folder provides a
+  # shim server.js that requires the original flat-folder files.
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: raftboard-gateway
+    networks: [raftboard-net]
+    ports:
+      - "4000:4000"
+    environment:
+      GATEWAY_PORT:          "4000"
+      NODE_ENV:              "development"
+      LOG_LEVEL:             "info"
+      REPLICA1_URL:          "http://replica1:5001"
+      REPLICA2_URL:          "http://replica2:5002"
+      REPLICA3_URL:          "http://replica3:5003"
+      HEARTBEAT_INTERVAL_MS: "2000"
+      HEARTBEAT_TIMEOUT_MS:  "1500"
+      LEADER_RETRY_ATTEMPTS: "3"
+      LEADER_RETRY_DELAY_MS: "500"
+      RATE_LIMIT_MSG_PER_SEC: "300"
+      RATE_LIMIT_CONN_PER_IP: "10"
+    depends_on:
+      replica1: { condition: service_healthy }
+      replica2: { condition: service_healthy }
+      replica3: { condition: service_healthy }
+    restart: unless-stopped
+    healthcheck:
+      test:     ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  3
+      start_period: 15s
+
+  # ── Frontend Static Server ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: raftboard-frontend
+    networks: [raftboard-net]
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # ── RAFT Dashboard (existing miniraft dashboard, rewired to new ports) ──────
+  dashboard:
+    build:
+      context: ./miniraft/dashboard
+      dockerfile: Dockerfile
+    container_name: raft-dashboard
+    networks: [raftboard-net]
+    ports:
+      - "6001:6001"
+    environment:
+      PORT:         "6001"
+      REPLICA1_URL: "http://replica1:5001"
+      REPLICA2_URL: "http://replica2:5002"
+      REPLICA3_URL: "http://replica3:5003"
+    depends_on:
+      replica1: { condition: service_healthy }
+      replica2: { condition: service_healthy }
+      replica3: { condition: service_healthy }
+    restart: unless-stopped

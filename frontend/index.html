@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>RaftBoard — Distributed Drawing</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f0f13;--bg2:#16161d;--bg3:#1e1e28;
+  --surface:#22222e;--surface2:#2a2a38;
+  --border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);
+  --accent:#7c6aff;--accent2:#a594ff;
+  --text:#e8e8f0;--text2:#9090a8;--text3:#5a5a72;
+  --green:#3ddc84;--red:#ff5f57;--amber:#ffbd2e;
+  --font-ui:'Segoe UI',system-ui,sans-serif;
+  --font-mono:'Menlo','Consolas',monospace;
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font-ui);}
+
+/* ── Modal ─────────────────────────────────────────────────────────── */
+.modal-backdrop{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100;}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:20px;padding:40px;width:420px;max-width:92vw;}
+.modal h1{font-size:22px;font-weight:700;margin-bottom:6px;letter-spacing:-.5px;}
+.modal p{color:var(--text2);font-size:14px;margin-bottom:26px;}
+.form-group{margin-bottom:14px;}
+.form-group label{display:block;font-size:11px;font-weight:600;color:var(--text2);margin-bottom:5px;letter-spacing:.5px;text-transform:uppercase;}
+.form-group input{width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:11px 14px;color:var(--text);font-size:15px;outline:none;transition:border-color .2s;}
+.form-group input:focus{border-color:var(--accent);}
+.form-group input::placeholder{color:var(--text3);}
+.btn-join{width:100%;margin-top:8px;padding:13px;border-radius:10px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:15px;font-weight:600;transition:background .2s;}
+.btn-join:hover{background:var(--accent2);}
+.join-error{color:var(--red);font-size:13px;margin-top:8px;min-height:18px;}
+.server-note{margin-top:14px;padding:10px 14px;background:var(--bg3);border-radius:8px;font-size:12px;color:var(--text3);font-family:var(--font-mono);}
+
+/* ── App Layout ─────────────────────────────────────────────────────── */
+#app{display:flex;flex-direction:column;height:100vh;}
+#app.hidden{display:none;}
+
+/* ── Topbar ─────────────────────────────────────────────────────────── */
+.topbar{height:52px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 16px;flex-shrink:0;}
+.topbar-left{display:flex;align-items:center;gap:12px;}
+.app-name{font-size:15px;font-weight:700;letter-spacing:-.3px;}
+.badge{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:4px 10px;font-size:12px;font-family:var(--font-mono);color:var(--text2);}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:background .4s;flex-shrink:0;}
+.dot.on{background:var(--green);box-shadow:0 0 6px var(--green);}
+.dot.warn{background:var(--amber);animation:pulse 1s infinite;}
+.dot.off{background:var(--red);}
+.leader-badge{background:rgba(124,106,255,.15);border:1px solid rgba(124,106,255,.3);border-radius:6px;padding:3px 9px;font-size:11px;font-family:var(--font-mono);color:var(--accent2);}
+.topbar-right{display:flex;align-items:center;gap:8px;}
+.avatars{display:flex;}
+.avatar{width:28px;height:28px;border-radius:50%;border:2px solid var(--bg2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;margin-left:-5px;}
+.btn-icon{width:34px;height:34px;border-radius:8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s,color .2s;font-size:16px;}
+.btn-icon:hover{background:var(--surface2);color:var(--text);}
+.btn-icon.danger:hover{background:rgba(255,95,87,.15);color:var(--red);}
+
+/* ── Canvas Area ─────────────────────────────────────────────────────── */
+.canvas-wrap{flex:1;position:relative;overflow:hidden;}
+canvas{position:absolute;inset:0;cursor:crosshair;}
+#cursorLayer{pointer-events:none;}
+
+/* ── Toolbar ─────────────────────────────────────────────────────────── */
+.toolbar{position:absolute;left:16px;top:50%;transform:translateY(-50%);background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:12px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;z-index:10;box-shadow:0 8px 32px rgba(0,0,0,.4);}
+.tool-btn{width:36px;height:36px;border-radius:9px;background:transparent;border:1px solid transparent;color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;transition:all .15s;}
+.tool-btn:hover{background:var(--surface);color:var(--text);}
+.tool-btn.active{background:var(--accent);color:#fff;}
+.divider{width:24px;height:1px;background:var(--border);}
+input[type=range].vslider{writing-mode:vertical-lr;direction:rtl;width:4px;height:72px;cursor:pointer;accent-color:var(--accent);}
+.brush-num{font-family:var(--font-mono);font-size:11px;color:var(--text3);}
+.color-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;}
+.swatch{width:16px;height:16px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .15s;}
+.swatch:hover{transform:scale(1.2);}
+.swatch.active{border-color:var(--text);transform:scale(1.15);}
+
+/* ── Remote Cursors ─────────────────────────────────────────────────── */
+.r-cursor{position:absolute;pointer-events:none;transform:translate(-2px,-2px);transition:left .05s,top .05s;}
+.r-cursor svg{display:block;}
+.r-cursor-label{position:absolute;top:18px;left:8px;font-size:11px;font-family:var(--font-mono);white-space:nowrap;padding:2px 6px;border-radius:4px;color:#fff;opacity:.85;}
+
+/* ── Notification ────────────────────────────────────────────────────── */
+.notif{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--border2);border-radius:10px;padding:10px 18px;font-size:13px;color:var(--text);pointer-events:none;opacity:0;transition:opacity .3s;z-index:200;}
+.notif.show{opacity:1;}
+
+/* ── Raft Panel ─────────────────────────────────────────────────────── */
+.raft-panel{position:fixed;bottom:16px;right:16px;background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:12px 16px;font-size:11px;font-family:var(--font-mono);color:var(--text3);z-index:50;min-width:220px;}
+.raft-panel h3{font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;letter-spacing:.5px;text-transform:uppercase;}
+.raft-row{display:flex;justify-content:space-between;gap:16px;margin-bottom:4px;}
+.raft-key{color:var(--text3);}
+.raft-val{color:var(--text2);}
+.raft-val.leader{color:var(--green);}
+.raft-val.election{color:var(--amber);}
+
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+</style>
+</head>
+<body>
+
+<!-- ── Join Modal ─────────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="joinScreen">
+  <div class="modal">
+    <h1>🎨 RaftBoard</h1>
+    <p>Distributed collaborative drawing powered by Mini-RAFT consensus.</p>
+    <div class="form-group">
+      <label>Your Name</label>
+      <input id="nameInput" placeholder="e.g. Alice" maxlength="30" autofocus/>
+    </div>
+    <div class="form-group">
+      <label>Room ID <span style="color:var(--text3);text-transform:none">(optional)</span></label>
+      <input id="roomInput" placeholder="default" maxlength="30"/>
+    </div>
+    <button class="btn-join" onclick="joinBoard()">Join Board →</button>
+    <div class="join-error" id="joinError"></div>
+    <div class="server-note">Gateway: <span id="gwUrl">ws://localhost:4000</span></div>
+  </div>
+</div>
+
+<!-- ── Main App ────────────────────────────────────────────────────────────── -->
+<div id="app" class="hidden">
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="app-name">🎨 RaftBoard</span>
+      <div class="badge"><div class="dot" id="connDot"></div><span id="connLabel">Connecting…</span></div>
+      <div class="leader-badge" id="leaderBadge">leader: —</div>
+    </div>
+    <div class="topbar-right">
+      <div class="avatars" id="avatarList"></div>
+      <button class="btn-icon danger" onclick="clearCanvas()" title="Clear">🗑</button>
+      <button class="btn-icon" onclick="undoLast()" title="Undo">↩</button>
+    </div>
+  </div>
+
+  <div class="canvas-wrap" id="wrap">
+    <canvas id="drawCanvas"></canvas>
+    <canvas id="cursorLayer"></canvas>
+    <div class="toolbar">
+      <button class="tool-btn active" id="toolPen" onclick="setTool('pen')" title="Pen">✏️</button>
+      <button class="tool-btn" id="toolEraser" onclick="setTool('eraser')" title="Eraser">🧹</button>
+      <div class="divider"></div>
+      <input type="range" class="vslider" id="sizeSlider" min="1" max="40" value="4" oninput="setBrush(this.value)"/>
+      <span class="brush-num" id="brushNum">4px</span>
+      <div class="divider"></div>
+      <div class="color-grid" id="colorGrid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── RAFT Status Panel ────────────────────────────────────────────── -->
+<div class="raft-panel" id="raftPanel" style="display:none">
+  <h3>⚡ RAFT Status</h3>
+  <div class="raft-row"><span class="raft-key">Leader</span><span class="raft-val leader" id="rLeader">—</span></div>
+  <div class="raft-row"><span class="raft-key">Clients</span><span class="raft-val" id="rClients">0</span></div>
+  <div class="raft-row"><span class="raft-key">Strokes</span><span class="raft-val" id="rStrokes">0</span></div>
+  <div class="raft-row"><span class="raft-key">Status</span><span class="raft-val" id="rStatus">—</span></div>
+</div>
+
+<!-- ── Notification ───────────────────────────────────────────────── -->
+<div class="notif" id="notif"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// Config
+// ═══════════════════════════════════════════════════════════════════
+const COLORS = ['#7c6aff','#3ddc84','#ff5f57','#ffbd2e','#00c8ff','#ff6baf','#ff8c42','#a594ff'];
+const GW_HOST = window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname;
+const GW_WS   = `ws://${GW_HOST}:4000`;
+
+// ═══════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════
+let ws, userId, userName, roomId, myColor;
+let strokes = [];
+let tool = 'pen';
+let brushSize = 4;
+let activeColor = COLORS[0];
+let drawing = false;
+let currentPath = [];
+let remoteCursors = {};
+let strokeCount = 0;
+
+// ═══════════════════════════════════════════════════════════════════
+// Canvas
+// ═══════════════════════════════════════════════════════════════════
+const drawCanvas = document.getElementById('drawCanvas');
+const cursorLayer = document.getElementById('cursorLayer');
+const ctx = drawCanvas.getContext('2d');
+const cCtx = cursorLayer.getContext('2d');
+
+function resizeCanvas() {
+  const wrap = document.getElementById('wrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  drawCanvas.width = w; drawCanvas.height = h;
+  cursorLayer.width = w; cursorLayer.height = h;
+  redrawAll();
+}
+window.addEventListener('resize', resizeCanvas);
+
+function redrawAll() {
+  ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  strokes.forEach(s => drawStroke(ctx, s));
+}
+
+function drawStroke(c, s) {
+  if (!s.points || s.points.length < 2) return;
+  c.save();
+  c.beginPath();
+  c.strokeStyle = s.eraser ? '#0f0f13' : (s.color || '#7c6aff');
+  c.lineWidth   = s.size || 4;
+  c.lineCap     = 'round';
+  c.lineJoin    = 'round';
+  c.globalAlpha = s.eraser ? 1 : 0.95;
+  c.moveTo(s.points[0].x, s.points[0].y);
+  for (let i = 1; i < s.points.length; i++) {
+    c.lineTo(s.points[i].x, s.points[i].y);
+  }
+  c.stroke();
+  c.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Color Grid
+// ═══════════════════════════════════════════════════════════════════
+(function buildColorGrid() {
+  const grid = document.getElementById('colorGrid');
+  COLORS.forEach((c, i) => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch' + (i === 0 ? ' active' : '');
+    sw.style.background = c;
+    sw.title = c;
+    sw.onclick = () => {
+      document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active');
+      activeColor = c;
+      setTool('pen');
+    };
+    grid.appendChild(sw);
+  });
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+// Tools
+// ═══════════════════════════════════════════════════════════════════
+function setTool(t) {
+  tool = t;
+  document.getElementById('toolPen').classList.toggle('active', t === 'pen');
+  document.getElementById('toolEraser').classList.toggle('active', t === 'eraser');
+}
+
+function setBrush(v) {
+  brushSize = parseInt(v);
+  document.getElementById('brushNum').textContent = v + 'px';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Mouse / Touch
+// ═══════════════════════════════════════════════════════════════════
+function getPos(e) {
+  const r = drawCanvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return { x: src.clientX - r.left, y: src.clientY - r.top };
+}
+
+drawCanvas.addEventListener('mousedown',  e => startDraw(getPos(e)));
+drawCanvas.addEventListener('mousemove',  e => { moveDraw(getPos(e)); sendCursor(getPos(e)); });
+drawCanvas.addEventListener('mouseup',    () => endDraw());
+drawCanvas.addEventListener('mouseleave', () => endDraw());
+drawCanvas.addEventListener('touchstart', e => { e.preventDefault(); startDraw(getPos(e)); }, { passive: false });
+drawCanvas.addEventListener('touchmove',  e => { e.preventDefault(); moveDraw(getPos(e)); }, { passive: false });
+drawCanvas.addEventListener('touchend',   () => endDraw());
+
+function startDraw(pos) {
+  drawing = true;
+  currentPath = [pos];
+}
+
+function moveDraw(pos) {
+  if (!drawing) return;
+  currentPath.push(pos);
+  // Draw locally for immediate feedback
+  if (currentPath.length >= 2) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = tool === 'eraser' ? '#0f0f13' : activeColor;
+    ctx.lineWidth   = brushSize;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    const pts = currentPath;
+    ctx.moveTo(pts[pts.length - 2].x, pts[pts.length - 2].y);
+    ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function endDraw() {
+  if (!drawing || currentPath.length < 2) { drawing = false; return; }
+  drawing = false;
+  const stroke = {
+    points:  currentPath,
+    color:   activeColor,
+    size:    brushSize,
+    eraser:  tool === 'eraser',
+    userId,
+    color:   myColor || activeColor,
+  };
+  strokes.push(stroke);
+  strokeCount++;
+  document.getElementById('rStrokes').textContent = strokeCount;
+  send({ type: 'stroke', stroke });
+  currentPath = [];
+}
+
+function sendCursor(pos) {
+  send({ type: 'cursor', pos });
+}
+
+function clearCanvas() {
+  if (!confirm('Clear the board for everyone?')) return;
+  strokes = [];
+  ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  send({ type: 'clear' });
+}
+
+function undoLast() {
+  send({ type: 'undo' });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WebSocket
+// ═══════════════════════════════════════════════════════════════════
+function send(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+  }
+}
+
+let reconnectTimer = null;
+let reconnectDelay = 1000;
+
+function connect() {
+  const url = `${GW_WS}?roomId=${encodeURIComponent(roomId)}&userId=${userId}&userName=${encodeURIComponent(userName)}`;
+  setStatus('warn', 'Connecting…');
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('on', 'Connected');
+    reconnectDelay = 1000;
+    document.getElementById('raftPanel').style.display = 'block';
+    notify('Connected to RaftBoard ✓');
+  };
+
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    handleMsg(msg);
+  };
+
+  ws.onclose = () => {
+    setStatus('off', 'Disconnected');
+    notify('Connection lost — reconnecting…');
+    reconnectTimer = setTimeout(() => {
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
+      connect();
+    }, reconnectDelay);
+  };
+
+  ws.onerror = () => {
+    setStatus('off', 'Error');
+  };
+}
+
+function handleMsg(msg) {
+  switch (msg.type) {
+
+    case 'init':
+      strokes = (msg.strokes || []).filter(s => s && s.points);
+      strokeCount = strokes.length;
+      document.getElementById('rStrokes').textContent = strokeCount;
+      redrawAll();
+      if (msg.yourColor) myColor = msg.yourColor;
+      if (msg.leaderUrl) updateLeaderBadge(msg.leaderUrl);
+      updateParticipants(msg.participants || []);
+      break;
+
+    case 'stroke:committed':
+      if (msg.stroke && msg.stroke.userId !== userId) {
+        strokes.push(msg.stroke);
+        drawStroke(ctx, msg.stroke);
+        strokeCount++;
+        document.getElementById('rStrokes').textContent = strokeCount;
+      }
+      break;
+
+    case 'undo:committed':
+      strokes = (msg.strokes || []).filter(s => s && s.points);
+      strokeCount = strokes.length;
+      document.getElementById('rStrokes').textContent = strokeCount;
+      redrawAll();
+      break;
+
+    case 'clear':
+      strokes = [];
+      strokeCount = 0;
+      document.getElementById('rStrokes').textContent = 0;
+      ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      break;
+
+    case 'cursor:update':
+      if (msg.userId !== userId) updateRemoteCursor(msg);
+      break;
+
+    case 'user:joined':
+      updateParticipants(msg.participants || []);
+      if (msg.userId !== userId) notify(`${msg.userName} joined`);
+      document.getElementById('rClients').textContent = (msg.participants || []).length;
+      break;
+
+    case 'user:left':
+      updateParticipants(msg.participants || []);
+      notify(`${msg.userName} left`);
+      removeRemoteCursor(msg.userId);
+      document.getElementById('rClients').textContent = (msg.participants || []).length;
+      break;
+
+    case 'leader:changed':
+      updateLeaderBadge(msg.leaderUrl || msg.leader || '');
+      notify('⚡ Leader changed — re-routing…');
+      document.getElementById('rStatus').textContent = 'failover';
+      setTimeout(() => document.getElementById('rStatus').textContent = 'stable', 3000);
+      break;
+
+    case 'error':
+      notify('⚠ ' + (msg.message || 'Error'));
+      break;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UI Helpers
+// ═══════════════════════════════════════════════════════════════════
+function setStatus(state, label) {
+  const dot = document.getElementById('connDot');
+  dot.className = 'dot ' + state;
+  document.getElementById('connLabel').textContent = label;
+  document.getElementById('rStatus').textContent = label;
+}
+
+function updateLeaderBadge(url) {
+  const id = url ? url.replace(/https?:\/\//, '').split(':')[0] : '—';
+  document.getElementById('leaderBadge').textContent = 'leader: ' + id;
+  document.getElementById('rLeader').textContent = id;
+}
+
+function updateParticipants(parts) {
+  const list = document.getElementById('avatarList');
+  list.innerHTML = '';
+  (parts || []).slice(0, 8).forEach(p => {
+    const a = document.createElement('div');
+    a.className = 'avatar';
+    a.style.background = p.color || '#7c6aff';
+    a.title = p.userName;
+    a.textContent = (p.userName || '?')[0].toUpperCase();
+    list.appendChild(a);
+  });
+  document.getElementById('rClients').textContent = (parts || []).length;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Remote Cursors
+// ═══════════════════════════════════════════════════════════════════
+function updateRemoteCursor(msg) {
+  let el = remoteCursors[msg.userId];
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'r-cursor';
+    el.innerHTML = `<svg width="14" height="18" viewBox="0 0 14 18">
+      <path d="M0 0 L0 14 L4 10 L7 17 L9 16 L6 9 L11 9Z" fill="${msg.color || '#fff'}" stroke="#000" stroke-width="1"/>
+    </svg>
+    <div class="r-cursor-label" style="background:${msg.color || '#fff'}">${msg.userName || ''}</div>`;
+    document.getElementById('wrap').appendChild(el);
+    remoteCursors[msg.userId] = el;
+  }
+  if (msg.pos) {
+    el.style.left = msg.pos.x + 'px';
+    el.style.top  = msg.pos.y + 'px';
+  }
+}
+
+function removeRemoteCursor(uid) {
+  if (remoteCursors[uid]) {
+    remoteCursors[uid].remove();
+    delete remoteCursors[uid];
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Notification
+// ═══════════════════════════════════════════════════════════════════
+let notifTimer;
+function notify(msg) {
+  const el = document.getElementById('notif');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(notifTimer);
+  notifTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Entry Point
+// ═══════════════════════════════════════════════════════════════════
+function joinBoard() {
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) { document.getElementById('joinError').textContent = 'Please enter your name.'; return; }
+  document.getElementById('joinError').textContent = '';
+
+  userName = name;
+  roomId   = document.getElementById('roomInput').value.trim() || 'default';
+  userId   = 'u-' + Math.random().toString(36).slice(2, 8);
+
+  document.getElementById('joinScreen').style.display = 'none';
+  document.getElementById('app').classList.remove('hidden');
+
+  resizeCanvas();
+  connect();
+}
+
+// Allow Enter key in modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !document.getElementById('joinScreen').style.display) {
+    joinBoard();
+  }
+});
+
+// Update gateway URL display
+document.getElementById('gwUrl').textContent = GW_WS;
+</script>
+</body>
+</html>
